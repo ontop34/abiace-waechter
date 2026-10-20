@@ -1,0 +1,66 @@
+# Prüft abiace.de alle 15 Minuten (GitHub startet geplante Läufe oft ein paar Minuten später).
+# Bei einem neuen Problem: Meldung (Issue) mit Label "störung" anlegen, dadurch kommt eine E-Mail.
+# Solange die Meldung offen ist, kommt keine weitere Mail. Läuft alles wieder, wird sie geschlossen.
+name: Wächter abiace.de
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      probealarm:
+        description: 'Probealarm auslösen (testet, ob die E-Mail ankommt)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+concurrency:
+  group: waechter
+
+jobs:
+  pruefen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Seite prüfen
+        id: pruefen
+        continue-on-error: true
+        env:
+          PROBEALARM: ${{ inputs.probealarm }}
+        run: node waechter.mjs
+
+      - name: Meldung anlegen oder schließen
+        id: meldung
+        run: |
+          offen=$(gh issue list --label "störung" --state open --json number --jq '.[0].number // empty')
+          if [ "${{ steps.pruefen.outcome }}" = "failure" ]; then
+            if [ -z "$offen" ]; then
+              gh issue create --label "störung" --title "abiace.de: Problem gefunden" --body-file bericht.md
+              echo "neu=ja" >> "$GITHUB_OUTPUT"
+            else
+              echo "Meldung #$offen ist schon offen, keine neue Mail."
+            fi
+          elif [ -n "$offen" ]; then
+            gh issue comment "$offen" --body-file bericht.md
+            gh issue close "$offen" --comment "Wieder alles in Ordnung, Meldung automatisch geschlossen."
+          fi
+
+      # Öffentliche Repos schalten geplante Läufe nach 60 Tagen ohne Änderung ab.
+      # Das erneute Einschalten setzt diese Frist zurück.
+      - name: Wach halten
+        if: github.event_name == 'schedule'
+        run: gh api -X PUT "repos/$GH_REPO/actions/workflows/waechter.yml/enable"
+
+      # Zusätzlich schlägt der Lauf fehl, wenn ein neues Problem gemeldet wurde (zweite Mail von GitHub Actions).
+      - name: Lauf als fehlgeschlagen markieren
+        if: steps.meldung.outputs.neu == 'ja'
+        run: exit 1
