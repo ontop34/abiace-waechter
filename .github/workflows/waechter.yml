@@ -36,6 +36,8 @@ jobs:
         continue-on-error: true
         env:
           PROBEALARM: ${{ inputs.probealarm }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: node waechter.mjs
 
       - name: Meldung anlegen oder schließen

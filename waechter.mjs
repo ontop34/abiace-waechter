@@ -66,6 +66,35 @@ const pruefungen = [
   }],
 ];
 
+// Supabase (Konto und Sync der App). Adresse und öffentlicher Schlüssel kommen aus den
+// Repo-Secrets SUPABASE_URL und SUPABASE_KEY, damit die Projekt-Adresse nicht im öffentlichen Code steht.
+// Gratis-Projekte pausieren nach 7 Tagen ohne Nutzung; die Datenbank-Abfrage hier soll das möglichst verhindern.
+const SUPABASE_URL = process.env.SUPABASE_URL?.replace(/\/+$/, '');
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+if (SUPABASE_URL && SUPABASE_KEY) {
+  pruefungen.push(
+    ['Supabase: Anmeldedienst', async () => {
+      const res = await supabase('/auth/v1/health');
+      if (res.status !== 200) throw new Error(`Status ${res.status} statt 200 (Projekt pausiert?)`);
+      return 'Status 200';
+    }],
+    ['Supabase: Datenbank antwortet', async () => {
+      // Ohne Anmeldung darf man nichts lesen. Antwortet die Datenbank mit "keine Berechtigung" (42501),
+      // läuft sie. Bei einem pausierten Projekt kommt eine andere Antwort.
+      const res = await supabase('/rest/v1/progress?select=user_id&limit=1');
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 200 || body.code === '42501') return 'Datenbank erreichbar';
+      throw new Error(`Status ${res.status}${body.code ? `, Code ${body.code}` : ''} (Projekt pausiert?)`);
+    }],
+  );
+} else {
+  console.log('Supabase übersprungen (SUPABASE_URL und SUPABASE_KEY nicht gesetzt)');
+}
+
+function supabase(pfad) {
+  return fetch(SUPABASE_URL + pfad, { headers: { apikey: SUPABASE_KEY }, signal: AbortSignal.timeout(20_000) });
+}
+
 // Probealarm (Knopf "Run workflow" mit Haken): prüft, ob die Benachrichtigung ankommt.
 if (process.env.PROBEALARM === 'true') {
   pruefungen.push(['Probealarm', async () => { throw new Error('absichtlich ausgelöst, um die E-Mail zu testen'); }]);
@@ -118,6 +147,11 @@ async function allePruefen() {
   return ergebnisse;
 }
 
+// Der Bericht landet in öffentlichen Meldungen: die Supabase-Adresse darin unkenntlich machen.
+function verbergen(text) {
+  return text.replace(/[a-z0-9]+\.supabase\.(co|in)/gi, '(Supabase-Projekt)');
+}
+
 let ergebnisse = await allePruefen();
 // Kurze Aussetzer nicht melden: bei einem Fehler nach einer Minute noch einmal prüfen.
 if (ergebnisse.some((e) => !e.ok)) {
@@ -133,7 +167,7 @@ const bericht = [
   '',
   '| Prüfung | Ergebnis |',
   '|---|---|',
-  ...ergebnisse.map((e) => `| ${e.ok ? '✅' : '❌'} ${e.name} | ${e.text.replaceAll('|', '/')} |`),
+  ...ergebnisse.map((e) => `| ${e.ok ? '✅' : '❌'} ${e.name} | ${verbergen(e.text).replaceAll('|', '/')} |`),
   '',
 ].join('\n');
 
